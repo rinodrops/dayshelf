@@ -1,4 +1,5 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 
 use time::{Month, OffsetDateTime, Weekday};
 use uuid::Uuid;
@@ -7,7 +8,8 @@ use crate::calendar::{add_months, month_cells, parse_span, visible_months};
 use crate::card::{sort_cards, Card, Direction};
 use crate::config::{load_config, load_device_id, save_config, LocalConfig};
 use crate::days::{signed_days, CountKind};
-use crate::store::Store;
+use crate::store::{is_conflict_name, is_ignored_name, Store};
+use crate::watch::FolderWatch;
 
 pub struct DayShelfApp {
     config: LocalConfig,
@@ -18,6 +20,9 @@ pub struct DayShelfApp {
     anchor_text: String,
     view_year: i32,
     view_month: u8,
+    watch: Option<FolderWatch>,
+    watched: Option<PathBuf>,
+    self_writes: HashMap<PathBuf, String>,
 }
 
 impl DayShelfApp {
@@ -36,6 +41,9 @@ impl DayShelfApp {
             anchor_text: String::new(),
             view_year: today.year(),
             view_month: today.month() as u8,
+            watch: None,
+            watched: None,
+            self_writes: HashMap::new(),
         }
     }
 
@@ -80,8 +88,11 @@ impl DayShelfApp {
         card.updated_at = OffsetDateTime::now_utc();
         card.device_id = self.device_id.clone();
         card.deleted_at = None;
-        match Store::new(folder).save(card) {
-            Ok(_) => {
+        let store = Store::new(&folder);
+        match store.save(card) {
+            Ok(text) => {
+                let path = store.cards_dir().join(format!("{}.json", card.id));
+                self.self_writes.insert(path, text);
                 self.editor = None;
                 self.message.clear();
                 self.reload();
@@ -97,9 +108,16 @@ impl DayShelfApp {
         card.deleted_at = Some(OffsetDateTime::now_utc());
         card.updated_at = OffsetDateTime::now_utc();
         card.device_id = self.device_id.clone();
-        if let Err(error) = Store::new(folder).save(&card) {
-            self.message = format!("{error:?}");
-            return;
+        let store = Store::new(&folder);
+        match store.save(&card) {
+            Ok(text) => {
+                let path = store.cards_dir().join(format!("{}.json", card.id));
+                self.self_writes.insert(path, text);
+            }
+            Err(error) => {
+                self.message = format!("{error:?}");
+                return;
+            }
         }
         if self.editor.as_ref().is_some_and(|open| open.id == card.id) {
             self.editor = None;
@@ -127,10 +145,56 @@ impl DayShelfApp {
     fn reload(&mut self) {
         self.cards = visible_cards(&self.config);
     }
+
+    fn poll_folder(&mut self) {
+        let wanted = self.config.folder().map(crate::store::cards_dir);
+        if self.watched.as_ref() != wanted.as_ref() {
+            self.watch = wanted
+                .as_ref()
+                .and_then(|dir| FolderWatch::open(dir.clone()).ok());
+            self.watched = wanted;
+        }
+        let Some(watch) = &self.watch else {
+            return;
+        };
+        let paths = watch.poll();
+        if paths.is_empty() {
+            return;
+        }
+        let Some(folder) = self.config.folder().map(|path| path.to_path_buf()) else {
+            return;
+        };
+        let store = Store::new(&folder);
+        let mut changed = false;
+        for path in paths {
+            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            if is_ignored_name(name) {
+                continue;
+            }
+            if is_conflict_name(name) {
+                let _ = store.absorb_conflict(&path);
+                changed = true;
+                continue;
+            }
+            if let Ok(text) = std::fs::read_to_string(&path) {
+                if self.self_writes.get(&path) == Some(&text) {
+                    self.self_writes.remove(&path);
+                    continue;
+                }
+            }
+            changed = true;
+        }
+        if changed {
+            self.reload();
+        }
+    }
 }
 
 impl eframe::App for DayShelfApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.poll_folder();
         egui::CentralPanel::default().show(ctx, |ui| {
             if self.config.folder().is_none() {
                 ui.heading("DayShelf");

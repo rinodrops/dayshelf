@@ -4,6 +4,7 @@ mod config;
 mod days;
 mod store;
 pub mod ui;
+mod watch;
 
 pub use calendar::{add_months, month_cells, parse_span, visible_months, Span};
 pub use card::{prefer, sort_cards, Card, CardOrder, Direction};
