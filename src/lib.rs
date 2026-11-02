@@ -2,6 +2,7 @@ mod calendar;
 mod card;
 mod config;
 mod days;
+mod i18n;
 mod store;
 pub mod ui;
 mod watch;
