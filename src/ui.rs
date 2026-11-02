@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::SystemTime;
 
-use time::{Month, OffsetDateTime, Weekday};
+use time::{OffsetDateTime, Weekday};
 use uuid::Uuid;
 
 use crate::calendar::{add_months, month_cells, parse_span, visible_months};
@@ -10,7 +10,11 @@ use crate::card::{sort_cards, Card, Direction};
 use crate::config::{
     config_path, load_config, load_device_id, save_config, settings_binary, LocalConfig,
 };
-use crate::days::{signed_days, CountKind};
+use crate::days::signed_days;
+use crate::i18n::{
+    day_phrase, first_weekday, format_number, month_title, os_tag, show_week_numbers, text_for,
+    title_is_rtl, ui_language,
+};
 use crate::store::{is_conflict_name, is_ignored_name, Store};
 use crate::watch::FolderWatch;
 
@@ -52,6 +56,14 @@ impl DayShelfApp {
         }
     }
 
+    fn lang(&self) -> &'static str {
+        ui_language(&self.config.language)
+    }
+
+    fn copy(&self) -> &'static crate::i18n::Text {
+        text_for(&self.config.language)
+    }
+
     fn open_settings(&mut self) {
         self.config.sync_language_bcp();
         if let Err(error) = save_config(&self.config) {
@@ -62,7 +74,7 @@ impl DayShelfApp {
             return;
         };
         let Some(binary) = settings_binary() else {
-            self.message = "The settings program was not found.".to_owned();
+            self.message = self.copy().settings_missing.to_owned();
             return;
         };
         match std::process::Command::new(binary).arg(&path).spawn() {
@@ -124,7 +136,7 @@ impl DayShelfApp {
             &self.anchor_text,
             &time::macros::format_description!("[year]-[month]-[day]"),
         ) else {
-            self.message = "Use a date like 2026-11-03.".to_owned();
+            self.message = self.copy().bad_date.to_owned();
             return;
         };
         card.anchor = anchor;
@@ -241,15 +253,14 @@ impl eframe::App for DayShelfApp {
         self.poll_folder();
         egui::CentralPanel::default().show(ctx, |ui| {
             if self.config.folder().is_none() {
+                let copy = self.copy();
                 ui.heading("DayShelf");
-                ui.label(
-                    "Choose a folder for the cards. A cloud-storage folder works the same way.",
-                );
+                ui.label(copy.choose_folder);
                 ui.horizontal(|ui| {
-                    if ui.button("New").clicked() {
+                    if ui.button(copy.new_folder).clicked() {
                         self.choose_folder(true);
                     }
-                    if ui.button("Existing").clicked() {
+                    if ui.button(copy.existing).clicked() {
                         self.choose_folder(false);
                     }
                 });
@@ -260,14 +271,15 @@ impl eframe::App for DayShelfApp {
             }
 
             ui.horizontal(|ui| {
+                let copy = self.copy();
                 ui.heading("DayShelf");
-                if ui.button("New card").clicked() {
+                if ui.button(copy.new_card).clicked() {
                     self.open_new();
                 }
-                if ui.button("Settings").clicked() {
+                if ui.button(copy.settings).clicked() {
                     self.open_settings();
                 }
-                if ui.button("Change folder").clicked() {
+                if ui.button(copy.change_folder).clicked() {
                     self.config.sync.folder.clear();
                     let _ = save_config(&self.config);
                     self.cards.clear();
@@ -282,7 +294,7 @@ impl eframe::App for DayShelfApp {
                 return;
             }
             if self.cards.is_empty() {
-                ui.label("No cards yet.");
+                ui.label(self.copy().no_cards);
             }
             let mut action: Option<(Uuid, bool)> = None;
             egui::ScrollArea::vertical().show(ui, |ui| {
@@ -294,7 +306,7 @@ impl eframe::App for DayShelfApp {
                     .spacing([12.0, 12.0])
                     .show(ui, |ui| {
                         for (index, card) in self.cards.iter().enumerate() {
-                            if let Some(delete) = card_face(ui, card) {
+                            if let Some(delete) = card_face(ui, card, self.lang()) {
                                 action = Some((card.id, delete));
                             }
                             if (index + 1) % cols == 0 {
@@ -344,7 +356,15 @@ impl DayShelfApp {
         let mut create_on = None;
         ui.horizontal(|ui| {
             for (year, month) in months {
-                create_on = create_on.or(month_grid(ui, year, month, &marked));
+                create_on = create_on.or(month_grid(
+                    ui,
+                    year,
+                    month,
+                    &marked,
+                    self.lang(),
+                    &os_tag(),
+                    &self.config.calendar.week_start,
+                ));
             }
         });
         if let Some(date) = create_on {
@@ -355,26 +375,32 @@ impl DayShelfApp {
 
 impl DayShelfApp {
     fn editor_ui(&mut self, ui: &mut egui::Ui, mut card: Card) {
-        ui.label("Title");
+        let copy = self.copy();
+        ui.label(copy.title);
         ui.text_edit_singleline(&mut card.title);
-        ui.label("Anchor date");
+        ui.label(copy.anchor);
         ui.text_edit_singleline(&mut self.anchor_text);
-        ui.label("Direction");
+        ui.label(copy.direction);
         egui::ComboBox::from_id_salt("direction")
-            .selected_text(direction_label(card.direction))
+            .selected_text(direction_label(copy, card.direction))
             .show_ui(ui, |ui| {
                 for direction in [Direction::Auto, Direction::Countdown, Direction::Countup] {
-                    ui.selectable_value(&mut card.direction, direction, direction_label(direction));
+                    ui.selectable_value(
+                        &mut card.direction,
+                        direction,
+                        direction_label(copy, direction),
+                    );
                 }
             });
         let mut save = false;
         let mut cancel = false;
         let mut delete = false;
         ui.horizontal(|ui| {
-            save = ui.button("Save").clicked();
-            cancel = ui.button("Cancel").clicked();
+            let copy = self.copy();
+            save = ui.button(copy.save).clicked();
+            cancel = ui.button(copy.cancel).clicked();
             delete = ui
-                .add(egui::Button::new("Delete").fill(egui::Color32::from_rgb(180, 40, 40)))
+                .add(egui::Button::new(copy.delete).fill(egui::Color32::from_rgb(180, 40, 40)))
                 .clicked();
         });
         self.editor = Some(card.clone());
@@ -400,26 +426,51 @@ fn month_grid(
     year: i32,
     month: u8,
     marked: &HashSet<time::Date>,
+    lang: &str,
+    os: &str,
+    week_setting: &str,
 ) -> Option<time::Date> {
     let mut create_on = None;
+    let copy = text_for(lang);
+    let start = first_weekday(week_setting, os);
+    let rtl = lang == "ara";
+    let weeks = show_week_numbers(os, start);
     ui.vertical(|ui| {
-        let name = Month::try_from(month)
-            .map(|month| month.to_string())
-            .unwrap_or_default();
-        ui.label(format!("{name} {year}"));
+        ui.label(month_title(lang, year, month));
+        let mut headers: Vec<&str> = copy.weekdays.to_vec();
+        rotate_weekdays(&mut headers, start);
+        if rtl {
+            headers.reverse();
+        }
         ui.horizontal(|ui| {
-            for label in ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"] {
-                ui.add_sized([28.0, 16.0], egui::Label::new(label));
+            if weeks && !rtl {
+                ui.add_sized([28.0, 16.0], egui::Label::new(""));
+            }
+            for label in &headers {
+                ui.add_sized([28.0, 16.0], egui::Label::new(*label));
             }
         });
-        let cells = month_cells(year, month, Weekday::Monday);
-        for week in cells.chunks(7) {
+        let mut cells = month_cells(year, month, start);
+        for week in cells.chunks_mut(7) {
+            if rtl {
+                week.reverse();
+            }
+            let week_no = week
+                .iter()
+                .find(|date| date.weekday() == Weekday::Thursday)
+                .map(|date| date.to_iso_week_date().1);
             ui.horizontal(|ui| {
-                for date in week {
-                    let in_month = date.month() as u8 == month;
-                    let mut text = date.day().to_string();
+                if weeks && !rtl {
+                    let label = week_no
+                        .map(|n| format_number(lang, os, i64::from(n)))
+                        .unwrap_or_default();
+                    ui.add_sized([28.0, 24.0], egui::Label::new(label));
+                }
+                for date in week.iter() {
+                    let in_month = u8::from(date.month()) == month;
+                    let mut text = format_number(lang, os, i64::from(date.day()));
                     if marked.contains(date) {
-                        text.push('*');
+                        text.push('•');
                     }
                     let mut button = egui::Button::new(text);
                     if !in_month {
@@ -427,7 +478,7 @@ fn month_grid(
                     }
                     let response = ui.add_sized([28.0, 24.0], button);
                     response.context_menu(|ui| {
-                        if ui.button("New card").clicked() {
+                        if ui.button(copy.new_card).clicked() {
                             create_on = Some(*date);
                             ui.close_menu();
                         }
@@ -439,44 +490,62 @@ fn month_grid(
     create_on
 }
 
-fn direction_label(direction: Direction) -> &'static str {
+fn rotate_weekdays(labels: &mut [&str], start: Weekday) {
+    let offset = match start {
+        Weekday::Monday => 0,
+        Weekday::Tuesday => 1,
+        Weekday::Wednesday => 2,
+        Weekday::Thursday => 3,
+        Weekday::Friday => 4,
+        Weekday::Saturday => 5,
+        Weekday::Sunday => 6,
+    };
+    labels.rotate_left(offset);
+}
+
+fn direction_label(copy: &crate::i18n::Text, direction: Direction) -> &'static str {
     match direction {
-        Direction::Auto => "Auto",
-        Direction::Countdown => "Countdown",
-        Direction::Countup => "Countup",
+        Direction::Auto => copy.auto,
+        Direction::Countdown => copy.countdown,
+        Direction::Countup => copy.countup,
     }
 }
 
 /// Returns `Some(true)` to delete and `Some(false)` to edit.
-fn card_face(ui: &mut egui::Ui, card: &Card) -> Option<bool> {
-    let today = OffsetDateTime::now_local()
-        .map(|time| time.date())
-        .unwrap_or_else(|_| OffsetDateTime::now_utc().date());
+fn card_face(ui: &mut egui::Ui, card: &Card, lang: &str) -> Option<bool> {
+    let today = today();
     let (days, kind) = signed_days(today, card.anchor, card.direction);
-    let kind_label = match kind {
-        CountKind::Countdown => "Countdown",
-        CountKind::Countup => "Countup",
-        CountKind::Today => "Today",
-    };
+    let copy = text_for(lang);
+    let os = os_tag();
+    let number = format_number(lang, &os, days);
+    let kind_label = day_phrase(lang, days, kind);
+    let rtl = title_is_rtl(&card.title, card.lang.as_deref());
     let mut action = None;
     let frame = egui::Frame::group(ui.style()).show(ui, |ui| {
         ui.set_min_size(egui::vec2(188.0, 120.0));
         ui.set_max_width(188.0);
-        ui.label(if card.title.is_empty() {
-            "Untitled"
+        let title = if card.title.is_empty() {
+            copy.untitled.to_owned()
         } else {
-            &card.title
-        });
-        ui.heading(days.to_string());
+            card.title.clone()
+        };
+        if rtl {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
+                ui.label(title);
+            });
+        } else {
+            ui.label(title);
+        }
+        ui.heading(number);
         ui.label(kind_label);
-        ui.label(card.anchor.to_string());
+        ui.label(format_number(lang, &os, i64::from(card.anchor.day())));
     });
     frame.response.context_menu(|ui| {
-        if ui.button("Edit").clicked() {
+        if ui.button(copy.edit).clicked() {
             action = Some(false);
             ui.close_menu();
         }
-        if ui.button("Delete").clicked() {
+        if ui.button(copy.delete).clicked() {
             action = Some(true);
             ui.close_menu();
         }
@@ -503,7 +572,9 @@ fn prepare_folder(folder: &std::path::Path, create: bool) -> Result<(), String> 
     if create {
         std::fs::create_dir_all(&cards).map_err(|error| error.to_string())?;
     } else if !cards.is_dir() {
-        return Err("That folder has no cards directory.".to_owned());
+        return Err(text_for(&crate::config::load_config().language)
+            .no_cards_dir
+            .to_owned());
     }
     Ok(())
 }
