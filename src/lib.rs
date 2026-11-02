@@ -1,9 +1,11 @@
+mod calendar;
 mod card;
 mod config;
 mod days;
 mod store;
 pub mod ui;
 
+pub use calendar::{add_months, month_cells, parse_span, visible_months, Span};
 pub use card::{prefer, sort_cards, Card, CardOrder, Direction};
 pub use config::{load_config, load_device_id, save_config, LocalConfig};
 pub use days::{signed_days, CountKind};

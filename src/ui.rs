@@ -1,6 +1,9 @@
-use time::OffsetDateTime;
+use std::collections::HashSet;
+
+use time::{Month, OffsetDateTime, Weekday};
 use uuid::Uuid;
 
+use crate::calendar::{add_months, month_cells, parse_span, visible_months};
 use crate::card::{sort_cards, Card, Direction};
 use crate::config::{load_config, load_device_id, save_config, LocalConfig};
 use crate::days::{signed_days, CountKind};
@@ -13,6 +16,8 @@ pub struct DayShelfApp {
     message: String,
     editor: Option<Card>,
     anchor_text: String,
+    view_year: i32,
+    view_month: u8,
 }
 
 impl DayShelfApp {
@@ -21,6 +26,7 @@ impl DayShelfApp {
         let config = load_config();
         let device_id = load_device_id();
         let cards = visible_cards(&config);
+        let today = today();
         Self {
             config,
             device_id,
@@ -28,22 +34,27 @@ impl DayShelfApp {
             message: String::new(),
             editor: None,
             anchor_text: String::new(),
+            view_year: today.year(),
+            view_month: today.month() as u8,
         }
     }
 
-    fn open_new(&mut self) {
-        let today = today();
-        self.anchor_text = today.to_string();
+    fn open_new_on(&mut self, anchor: time::Date) {
+        self.anchor_text = anchor.to_string();
         self.editor = Some(Card {
             id: Uuid::new_v4(),
             title: String::new(),
             lang: None,
-            anchor: today,
+            anchor,
             direction: Direction::Auto,
             updated_at: OffsetDateTime::now_utc(),
             deleted_at: None,
             device_id: self.device_id.clone(),
         });
+    }
+
+    fn open_new(&mut self) {
+        self.open_new_on(today());
     }
 
     fn open_edit(&mut self, card: Card) {
@@ -190,7 +201,44 @@ impl eframe::App for DayShelfApp {
                     }
                 }
             }
+            self.calendar_ui(ui);
         });
+    }
+}
+
+impl DayShelfApp {
+    fn calendar_ui(&mut self, ui: &mut egui::Ui) {
+        ui.separator();
+        ui.horizontal(|ui| {
+            if ui.button("◀").clicked() {
+                if let Some((year, month)) = add_months(self.view_year, self.view_month, -1) {
+                    self.view_year = year;
+                    self.view_month = month;
+                }
+            }
+            if ui.button("▶").clicked() {
+                if let Some((year, month)) = add_months(self.view_year, self.view_month, 1) {
+                    self.view_year = year;
+                    self.view_month = month;
+                }
+            }
+            ui.label(format!("{:04}-{:02}", self.view_year, self.view_month));
+        });
+        let marked: HashSet<_> = self.cards.iter().map(|card| card.anchor).collect();
+        let months = visible_months(
+            (self.view_year, self.view_month),
+            self.config.month_count,
+            parse_span(&self.config.span),
+        );
+        let mut create_on = None;
+        ui.horizontal(|ui| {
+            for (year, month) in months {
+                create_on = create_on.or(month_grid(ui, year, month, &marked));
+            }
+        });
+        if let Some(date) = create_on {
+            self.open_new_on(date);
+        }
     }
 }
 
@@ -234,6 +282,50 @@ fn today() -> time::Date {
     OffsetDateTime::now_local()
         .map(|time| time.date())
         .unwrap_or_else(|_| OffsetDateTime::now_utc().date())
+}
+
+fn month_grid(
+    ui: &mut egui::Ui,
+    year: i32,
+    month: u8,
+    marked: &HashSet<time::Date>,
+) -> Option<time::Date> {
+    let mut create_on = None;
+    ui.vertical(|ui| {
+        let name = Month::try_from(month)
+            .map(|month| month.to_string())
+            .unwrap_or_default();
+        ui.label(format!("{name} {year}"));
+        ui.horizontal(|ui| {
+            for label in ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"] {
+                ui.add_sized([28.0, 16.0], egui::Label::new(label));
+            }
+        });
+        let cells = month_cells(year, month, Weekday::Monday);
+        for week in cells.chunks(7) {
+            ui.horizontal(|ui| {
+                for date in week {
+                    let in_month = date.month() as u8 == month;
+                    let mut text = date.day().to_string();
+                    if marked.contains(date) {
+                        text.push('*');
+                    }
+                    let mut button = egui::Button::new(text);
+                    if !in_month {
+                        button = button.frame(false);
+                    }
+                    let response = ui.add_sized([28.0, 24.0], button);
+                    response.context_menu(|ui| {
+                        if ui.button("New card").clicked() {
+                            create_on = Some(*date);
+                            ui.close_menu();
+                        }
+                    });
+                }
+            });
+        }
+    });
+    create_on
 }
 
 fn direction_label(direction: Direction) -> &'static str {
