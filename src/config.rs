@@ -11,6 +11,10 @@ pub struct LocalConfig {
     pub sync_folder: String,
     #[serde(default)]
     pub cards_order: CardOrder,
+    #[serde(default = "default_month_count")]
+    pub month_count: u8,
+    #[serde(default = "default_span")]
+    pub span: String,
 }
 
 impl Default for LocalConfig {
@@ -18,8 +22,18 @@ impl Default for LocalConfig {
         Self {
             sync_folder: String::new(),
             cards_order: CardOrder::PastToFuture,
+            month_count: default_month_count(),
+            span: default_span(),
         }
     }
+}
+
+fn default_month_count() -> u8 {
+    1
+}
+
+fn default_span() -> String {
+    "include_previous".to_owned()
 }
 
 impl LocalConfig {
