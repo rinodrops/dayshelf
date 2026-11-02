@@ -1,12 +1,15 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::time::SystemTime;
 
 use time::{Month, OffsetDateTime, Weekday};
 use uuid::Uuid;
 
 use crate::calendar::{add_months, month_cells, parse_span, visible_months};
 use crate::card::{sort_cards, Card, Direction};
-use crate::config::{load_config, load_device_id, save_config, LocalConfig};
+use crate::config::{
+    config_path, load_config, load_device_id, save_config, settings_binary, LocalConfig,
+};
 use crate::days::{signed_days, CountKind};
 use crate::store::{is_conflict_name, is_ignored_name, Store};
 use crate::watch::FolderWatch;
@@ -23,6 +26,7 @@ pub struct DayShelfApp {
     watch: Option<FolderWatch>,
     watched: Option<PathBuf>,
     self_writes: HashMap<PathBuf, String>,
+    config_mtime: Option<SystemTime>,
 }
 
 impl DayShelfApp {
@@ -44,7 +48,46 @@ impl DayShelfApp {
             watch: None,
             watched: None,
             self_writes: HashMap::new(),
+            config_mtime: None,
         }
+    }
+
+    fn open_settings(&mut self) {
+        self.config.sync_language_bcp();
+        if let Err(error) = save_config(&self.config) {
+            self.message = error.to_string();
+            return;
+        }
+        let Some(path) = config_path() else {
+            return;
+        };
+        let Some(binary) = settings_binary() else {
+            self.message = "The settings program was not found.".to_owned();
+            return;
+        };
+        match std::process::Command::new(binary).arg(&path).spawn() {
+            Ok(_) => self.message.clear(),
+            Err(error) => self.message = error.to_string(),
+        }
+    }
+
+    fn poll_config(&mut self) {
+        let Some(path) = config_path() else {
+            return;
+        };
+        let Ok(modified) = std::fs::metadata(&path).and_then(|meta| meta.modified()) else {
+            return;
+        };
+        if self.config_mtime == Some(modified) {
+            return;
+        }
+        self.config_mtime = Some(modified);
+        let loaded = load_config();
+        if loaded == self.config {
+            return;
+        }
+        self.config = loaded;
+        self.reload();
     }
 
     fn open_new_on(&mut self, anchor: time::Date) {
@@ -133,7 +176,7 @@ impl DayShelfApp {
             self.message = error;
             return;
         }
-        self.config.sync_folder = folder.display().to_string();
+        self.config.sync.folder = folder.display().to_string();
         if let Err(error) = save_config(&self.config) {
             self.message = error.to_string();
             return;
@@ -194,6 +237,7 @@ impl DayShelfApp {
 
 impl eframe::App for DayShelfApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.poll_config();
         self.poll_folder();
         egui::CentralPanel::default().show(ctx, |ui| {
             if self.config.folder().is_none() {
@@ -220,8 +264,11 @@ impl eframe::App for DayShelfApp {
                 if ui.button("New card").clicked() {
                     self.open_new();
                 }
+                if ui.button("Settings").clicked() {
+                    self.open_settings();
+                }
                 if ui.button("Change folder").clicked() {
-                    self.config.sync_folder.clear();
+                    self.config.sync.folder.clear();
                     let _ = save_config(&self.config);
                     self.cards.clear();
                     self.editor = None;
@@ -291,8 +338,8 @@ impl DayShelfApp {
         let marked: HashSet<_> = self.cards.iter().map(|card| card.anchor).collect();
         let months = visible_months(
             (self.view_year, self.view_month),
-            self.config.month_count,
-            parse_span(&self.config.span),
+            self.config.calendar.month_count,
+            parse_span(&self.config.calendar.span),
         );
         let mut create_on = None;
         ui.horizontal(|ui| {
@@ -447,7 +494,7 @@ fn visible_cards(config: &LocalConfig) -> Vec<Card> {
         .into_iter()
         .filter(|card| !card.is_deleted())
         .collect::<Vec<_>>();
-    sort_cards(&mut cards, config.cards_order);
+    sort_cards(&mut cards, config.cards.order);
     cards
 }
 

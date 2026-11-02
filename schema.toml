@@ -1,0 +1,52 @@
+# DayShelf settings. Build rinodrops/settings with SETTINGS_SCHEMA pointing here.
+icon_style = "rounded"
+theme = "os"
+lang = "os"
+lang_key = "language_bcp"
+save_button = "hide"
+
+[[tabs]]
+id = "general"
+label = { en = "General", ja = "一般", de = "Allgemein", fr = "Général", es = "General", pt = "Geral", it = "Generale", nl = "Algemeen", sv = "Allmänt", ru = "Общие", tr = "Genel", ar = "عام", zh = "常规", ko = "일반", hi = "सामान्य", vi = "Chung" }
+
+[[tabs.fields]]
+key = "language"
+label = { en = "Language", ja = "言語", de = "Sprache", fr = "Langue", es = "Idioma", pt = "Idioma", it = "Lingua", nl = "Taal", sv = "Språk", ru = "Язык", tr = "Dil", ar = "اللغة", zh = "语言", ko = "언어", hi = "भाषा", vi = "Ngôn ngữ" }
+type = "string"
+widget = "select"
+options = ["os", "ara", "cmn", "deu", "eng", "fra", "hin", "ita", "jpn", "kor", "nld", "por", "rus", "spa", "swe", "tur", "vie"]
+
+[[tabs.fields]]
+key = "cards.order"
+label = { en = "Card order", ja = "カードの並び", de = "Kartenfolge", fr = "Ordre des cartes", es = "Orden", pt = "Ordem", it = "Ordine", nl = "Volgorde", sv = "Ordning", ru = "Порядок", tr = "Sıra", ar = "الترتيب", zh = "排序", ko = "정렬", hi = "क्रम", vi = "Thứ tự" }
+type = "string"
+widget = "select"
+options = ["past_to_future", "future_to_past"]
+
+[[tabs.fields]]
+key = "calendar.week_start"
+label = { en = "First day of week", ja = "週の開始", de = "Wochenanfang", fr = "Premier jour", es = "Inicio de semana", pt = "Início da semana", it = "Inizio settimana", nl = "Weekstart", sv = "Veckostart", ru = "Начало недели", tr = "Haftanın ilk günü", ar = "بداية الأسبوع", zh = "一周开始", ko = "한 주의 시작", hi = "सप्ताह का आरंभ", vi = "Ngày đầu tuần" }
+type = "string"
+widget = "select"
+options = ["locale", "sunday", "monday", "saturday"]
+
+[[tabs.fields]]
+key = "calendar.month_count"
+label = { en = "Months", ja = "月の枚数", de = "Monate", fr = "Mois", es = "Meses", pt = "Meses", it = "Mesi", nl = "Maanden", sv = "Månader", ru = "Месяцы", tr = "Aylar", ar = "الأشهر", zh = "月数", ko = "월 수", hi = "महीने", vi = "Số tháng" }
+type = "number"
+widget = "select"
+options = ["1", "2", "3"]
+
+[[tabs.fields]]
+key = "calendar.span"
+label = { en = "Month range", ja = "月の範囲", de = "Monatsbereich", fr = "Plage", es = "Intervalo", pt = "Intervalo", it = "Intervallo", nl = "Bereik", sv = "Intervall", ru = "Диапазон", tr = "Aralık", ar = "النطاق", zh = "月份范围", ko = "월 범위", hi = "सीमा", vi = "Phạm vi" }
+type = "string"
+widget = "select"
+options = ["include_previous", "start_at_current"]
+
+[[tabs.fields]]
+key = "sync.folder"
+label = { en = "Sync folder", ja = "同期フォルダ", de = "Sync-Ordner", fr = "Dossier", es = "Carpeta", pt = "Pasta", it = "Cartella", nl = "Map", sv = "Mapp", ru = "Папка", tr = "Klasör", ar = "المجلد", zh = "同步文件夹", ko = "동기화 폴더", hi = "फ़ोल्डर", vi = "Thư mục" }
+type = "string"
+widget = "file_path"
+is_directory = true
