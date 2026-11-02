@@ -1,16 +1,18 @@
 use time::OffsetDateTime;
+use uuid::Uuid;
 
-use crate::card::{sort_cards, Card};
+use crate::card::{sort_cards, Card, Direction};
 use crate::config::{load_config, load_device_id, save_config, LocalConfig};
 use crate::days::{signed_days, CountKind};
 use crate::store::Store;
 
 pub struct DayShelfApp {
     config: LocalConfig,
-    #[allow(dead_code)]
     device_id: String,
     cards: Vec<Card>,
     message: String,
+    editor: Option<Card>,
+    anchor_text: String,
 }
 
 impl DayShelfApp {
@@ -24,7 +26,74 @@ impl DayShelfApp {
             device_id,
             cards,
             message: String::new(),
+            editor: None,
+            anchor_text: String::new(),
         }
+    }
+
+    fn open_new(&mut self) {
+        let today = today();
+        self.anchor_text = today.to_string();
+        self.editor = Some(Card {
+            id: Uuid::new_v4(),
+            title: String::new(),
+            lang: None,
+            anchor: today,
+            direction: Direction::Auto,
+            updated_at: OffsetDateTime::now_utc(),
+            deleted_at: None,
+            device_id: self.device_id.clone(),
+        });
+    }
+
+    fn open_edit(&mut self, card: Card) {
+        self.anchor_text = card.anchor.to_string();
+        self.editor = Some(card);
+    }
+
+    fn save_editor(&mut self) {
+        let Some(folder) = self.config.folder().map(|path| path.to_path_buf()) else {
+            return;
+        };
+        let Some(card) = self.editor.as_mut() else {
+            return;
+        };
+        let Ok(anchor) = time::Date::parse(
+            &self.anchor_text,
+            &time::macros::format_description!("[year]-[month]-[day]"),
+        ) else {
+            self.message = "Use a date like 2026-11-03.".to_owned();
+            return;
+        };
+        card.anchor = anchor;
+        card.updated_at = OffsetDateTime::now_utc();
+        card.device_id = self.device_id.clone();
+        card.deleted_at = None;
+        match Store::new(folder).save(card) {
+            Ok(_) => {
+                self.editor = None;
+                self.message.clear();
+                self.reload();
+            }
+            Err(error) => self.message = format!("{error:?}"),
+        }
+    }
+
+    fn delete_card(&mut self, mut card: Card) {
+        let Some(folder) = self.config.folder().map(|path| path.to_path_buf()) else {
+            return;
+        };
+        card.deleted_at = Some(OffsetDateTime::now_utc());
+        card.updated_at = OffsetDateTime::now_utc();
+        card.device_id = self.device_id.clone();
+        if let Err(error) = Store::new(folder).save(&card) {
+            self.message = format!("{error:?}");
+            return;
+        }
+        if self.editor.as_ref().is_some_and(|open| open.id == card.id) {
+            self.editor = None;
+        }
+        self.reload();
     }
 
     fn choose_folder(&mut self, create: bool) {
@@ -73,18 +142,27 @@ impl eframe::App for DayShelfApp {
 
             ui.horizontal(|ui| {
                 ui.heading("DayShelf");
+                if ui.button("New card").clicked() {
+                    self.open_new();
+                }
                 if ui.button("Change folder").clicked() {
                     self.config.sync_folder.clear();
                     let _ = save_config(&self.config);
                     self.cards.clear();
+                    self.editor = None;
                 }
             });
             if !self.message.is_empty() {
                 ui.label(&self.message);
             }
+            if let Some(card) = self.editor.clone() {
+                self.editor_ui(ui, card);
+                return;
+            }
             if self.cards.is_empty() {
                 ui.label("No cards yet.");
             }
+            let mut action: Option<(Uuid, bool)> = None;
             egui::ScrollArea::vertical().show(ui, |ui| {
                 let width = ui.available_width();
                 let card_w = 200.0;
@@ -94,18 +172,80 @@ impl eframe::App for DayShelfApp {
                     .spacing([12.0, 12.0])
                     .show(ui, |ui| {
                         for (index, card) in self.cards.iter().enumerate() {
-                            card_face(ui, card);
+                            if let Some(delete) = card_face(ui, card) {
+                                action = Some((card.id, delete));
+                            }
                             if (index + 1) % cols == 0 {
                                 ui.end_row();
                             }
                         }
                     });
             });
+            if let Some((id, delete)) = action {
+                if let Some(card) = self.cards.iter().find(|card| card.id == id).cloned() {
+                    if delete {
+                        self.delete_card(card);
+                    } else {
+                        self.open_edit(card);
+                    }
+                }
+            }
         });
     }
 }
 
-fn card_face(ui: &mut egui::Ui, card: &Card) {
+impl DayShelfApp {
+    fn editor_ui(&mut self, ui: &mut egui::Ui, mut card: Card) {
+        ui.label("Title");
+        ui.text_edit_singleline(&mut card.title);
+        ui.label("Anchor date");
+        ui.text_edit_singleline(&mut self.anchor_text);
+        ui.label("Direction");
+        egui::ComboBox::from_id_salt("direction")
+            .selected_text(direction_label(card.direction))
+            .show_ui(ui, |ui| {
+                for direction in [Direction::Auto, Direction::Countdown, Direction::Countup] {
+                    ui.selectable_value(&mut card.direction, direction, direction_label(direction));
+                }
+            });
+        let mut save = false;
+        let mut cancel = false;
+        let mut delete = false;
+        ui.horizontal(|ui| {
+            save = ui.button("Save").clicked();
+            cancel = ui.button("Cancel").clicked();
+            delete = ui
+                .add(egui::Button::new("Delete").fill(egui::Color32::from_rgb(180, 40, 40)))
+                .clicked();
+        });
+        self.editor = Some(card.clone());
+        if save {
+            self.save_editor();
+        } else if cancel {
+            self.editor = None;
+            self.message.clear();
+        } else if delete {
+            self.delete_card(card);
+        }
+    }
+}
+
+fn today() -> time::Date {
+    OffsetDateTime::now_local()
+        .map(|time| time.date())
+        .unwrap_or_else(|_| OffsetDateTime::now_utc().date())
+}
+
+fn direction_label(direction: Direction) -> &'static str {
+    match direction {
+        Direction::Auto => "Auto",
+        Direction::Countdown => "Countdown",
+        Direction::Countup => "Countup",
+    }
+}
+
+/// Returns `Some(true)` to delete and `Some(false)` to edit.
+fn card_face(ui: &mut egui::Ui, card: &Card) -> Option<bool> {
     let today = OffsetDateTime::now_local()
         .map(|time| time.date())
         .unwrap_or_else(|_| OffsetDateTime::now_utc().date());
@@ -115,7 +255,8 @@ fn card_face(ui: &mut egui::Ui, card: &Card) {
         CountKind::Countup => "Countup",
         CountKind::Today => "Today",
     };
-    egui::Frame::group(ui.style()).show(ui, |ui| {
+    let mut action = None;
+    let frame = egui::Frame::group(ui.style()).show(ui, |ui| {
         ui.set_min_size(egui::vec2(188.0, 120.0));
         ui.set_max_width(188.0);
         ui.label(if card.title.is_empty() {
@@ -127,6 +268,17 @@ fn card_face(ui: &mut egui::Ui, card: &Card) {
         ui.label(kind_label);
         ui.label(card.anchor.to_string());
     });
+    frame.response.context_menu(|ui| {
+        if ui.button("Edit").clicked() {
+            action = Some(false);
+            ui.close_menu();
+        }
+        if ui.button("Delete").clicked() {
+            action = Some(true);
+            ui.close_menu();
+        }
+    });
+    action
 }
 
 fn visible_cards(config: &LocalConfig) -> Vec<Card> {
