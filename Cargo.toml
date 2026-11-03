@@ -5,6 +5,12 @@ edition = "2021"
 description = "Day cards that count down to a date and count up from one"
 license = "MIT"
 
+# Release builds strip debug info by default. On macOS that mis-aligns
+# proc-macro dylibs such as zerocopy_derive, and rustc then reports
+# that the crate cannot be found.
+[profile.release]
+strip = "none"
+
 [dependencies]
 directories = "6"
 notify = "6"
